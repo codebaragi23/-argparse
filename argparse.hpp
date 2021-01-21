@@ -27,18 +27,17 @@ typedef std::map<std::string, size_t> IndexMap;
  *  \code
  *    // create a parser and add the options
  *    ArgumentParser parser;
- *    parser.addArgument("-a");
  *    parser.addArgument("-n", "--name");
- *    parser.addArgument("-i", "--input", 1, "123");
  *    parser.addArgument("--strings", '+');
+ *    parser.addArgument("-i", "--input", 1, "123");
  * 
  *    // parse the command-line arguments
  *    parser.parse(argc, argv);
  *
  *    // get the inputs and iterate over them
- *    std::string name = parser.retrieve("name");
+ *    string name = parser.retrieve("name");
+ *    vector<string> strings = parser.retrieve<vector<string>>("strings");
  *    int input = parser.retrieve<int>("input");   // default 123
- *    vector<std::string> strings = parser.retrieve<vector<std::string>>("strings");
  *  \endcode
  *
  */
@@ -89,19 +88,29 @@ private:
     }
     // OUTWARD CONVERSIONS
     template <typename ValueType>
-    ValueType castTo()
+    ValueType &castTo()
+    {
+      if (content->type_info() == typeid(ValueType))
+        return static_cast<Holder<ValueType> *>(content)->held_;
+
+      throw std::bad_cast();
+    }
+
+    template <typename ValueType>
+    ValueType retrieve()
     {
       if (content->type_info() == typeid(ValueType))
         return static_cast<Holder<ValueType> *>(content)->held_;
       else
-        castTo(identity<ValueType>());
+        return retrieve(identity<ValueType>());
     }
 
   private:
     template <typename ValueType>
-    ValueType castTo(identity<ValueType>) { throw std::bad_cast(); }
-    double castTo(identity<double>) { std::stod(static_cast<Holder<std::string> *>(content)->held_); }
-    int castTo(identity<int>) { std::stoi(static_cast<Holder<std::string> *>(content)->held_); }
+    ValueType retrieve(identity<ValueType>) { throw std::bad_cast(); }
+    double retrieve(identity<double>) { return std::stod(static_cast<Holder<std::string> *>(content)->held_); }
+    int retrieve(identity<int>) { return std::stoi(static_cast<Holder<std::string> *>(content)->held_); }
+    bool retrieve(identity<bool>) { return static_cast<Holder<std::string> *>(content)->held_.compare("true") == 0; }
 
   private:
     // Inner placeholder interface
@@ -335,6 +344,7 @@ public:
     {
       std::string active_name = active.canonicalName();
       std::string el = *in;
+
       //  check if the element is a key
       if (index_.count(el) == 0)
       {
@@ -364,7 +374,12 @@ public:
                             .append(" when expecting more inputs to ")
                             .append(active_name),
                         true);
+
         active = arguments_[index_[el]];
+        // if nargs == 0(store_ture, that means no more argument)
+        if (active.fixed && active.fixed_nargs == 0)
+          variables_[index_[active.canonicalName()]].castTo<std::string>() = "true";
+
         // check if we've satisfied the required arguments
         if (!active.required && nrequired > 0)
           argumentError(std::string("encountered required argument ")
@@ -413,15 +428,15 @@ public:
   // Retrieve
   // --------------------------------------------------------------------------
   template <typename T>
-  T retrieve(const std::string &name)
+  const T retrieve(const std::string &name)
   {
     if (index_.count(delimit(name)) == 0)
       throw std::out_of_range("Key not found");
-    else if (count(name))
+    else if (count(name) == 0)
       throw std::out_of_range("Value not found");
 
     size_t N = index_[delimit(name)];
-    return variables_[N].castTo<T>();
+    return variables_[N].retrieve<T>();
   }
 
   // --------------------------------------------------------------------------
@@ -521,14 +536,12 @@ public:
     Argument arg = arguments_[N];
     Any var = variables_[N];
     // check if the argument is a vector
-    if (arg.fixed)
-    {
-      return !var.castTo<std::string>().empty();
-    }
-    else
-    {
+    if (!arg.fixed)
       return var.castTo<std::vector<std::string>>().size();
-    }
+    else if (arg.fixed_nargs > 0)
+      return !var.castTo<std::string>().empty();
+    else
+      return 1;
   }
 };
 #endif
